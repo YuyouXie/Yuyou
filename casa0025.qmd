@@ -1,0 +1,477 @@
+# CASA00025 Group Project Title Here
+
+## Project Summary 
+
+This project utilises Google Earth Engine to map, analyse, and simulate the relationship between vegetation (NDVI) and land surface temperature (LST) in Los Angeles neighbourhoods between 2013 and 2022. By combining satellite data, administrative boundaries, and interactive visualisations, the tool identifies persistent urban heat islands, quantifies the cooling benefits of greening, and highlights spatial disparities. The application enables planners and communities to make data-driven decisions about urban heat mitigation, promoting equitable, targeted interventions that are consistent with California's climate and public health policies.
+
+### Problem Statement 
+
+Understanding the Urban Heat Island Index
+https://calepa.ca.gov/climate/urban-heat-island-index-for-california/understanding-the-urban-heat-island-index/
+In 2012, California’s legislature passed AB 296 (Chapter 667), mandating CalEPA to develop measurable urban emission reduction and cooling targets, urging metropolitan areas to address climate and health challenges (California Environmental Protection Agency, 2012). As a major western city, Los Angeles faces intensified urban heat island effects due to its Mediterranean climate, basin topography, and uneven green space distribution—causing higher daytime temperatures, poor nighttime cooling, and increased ozone levels in green-deficient neighborhoods, raising public health risks. With over 1,100 heat-related deaths annually in California, vulnerable groups face disproportionate exposure. This application uses Google Earth Engine to support equitable, data-driven green infrastructure strategies aligned with AB 296.
+
+
+### End User 
+
+This application is designed for urban planners, public health officials, environmental scientists, GIS analysts, and community organizations across Los Angeles. Powered by Google Earth Engine, it generates annual NDVI and land surface temperature (LST) fluctuation maps for 100 incorporated cities in the county, performs pixel-level correlation analysis to identify precise “high-heat, low-green” hotspots, and produces comparative trend reports for coastal, basin, and foothill communities. Users can export annotated interactive maps and charts, integrating results into greening and cooling strategies to support equitable green infrastructure interventions and mitigate health risks through data-driven, participatory, and climate-responsive decision-making.
+
+
+### Data
+
+Source of data:
+Neighborhood Council Boundaries (2018)
+https://geohub.lacity.org/datasets/674f80b8edee4bf48551512896a1821d_0/explore?location=34.299731%2C-118.430536%2C8.93
+
+USGS Landsat 8 Level 2, Collection 2, Tier 1
+https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C02_T1_L2
+
+MOD11A2 v006
+MODIS/Terra Land Surface Temperature/Emissivity 8-Day L3 Global 1 km SIN GridPI: Zhengming Wan
+https://lpdaac.usgs.gov/products/mod11a2v006/
+
+MOD13Q1.061 Terra Vegetation Indices 16-Day Global 250m
+https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD13Q1?hl=zh-cn
+
+Data Processing:
+1. 	Goal
+Extract annual average NDVI and LST for each neighborhood, analyzing ten-year trends. Each cycle starts in July and ends the following July.
+2. 	Data Output
+• One NDVI and one LST table per year (10 years total)
+• Each table includes average values for all neighborhoods
+3. 	Processing
+• Load boundaries for 100 incorporated communities in Los Angeles
+• Define time range (2013–2023)
+• Define NDVI and LST extraction functions and export yearly data
+• Loop through all years
+4. 	Result
+See 20 export tasks in GEE. Click “Run” to export to Google Drive for analysis and visualization.
+
+### Methodology
+
+We calculate the annual mean NDVI and LST to assess overall trends in vegetation and surface temperature. Spatial mapping reveals patterns of greenness and heat hotspots. The urban-rural comparison assesses vulnerability across different areas. NDVI-LST regression measures the cooling effect of vegetation. Heat island frequency analysis identifies neighbourhoods that require immediate intervention. Scenario simulations estimate the cooling effect of increased greening. Each method is intended to reveal aspects of the vegetation-temperature relationship and to aid in urban heat mitigation and green infrastructure planning.
+
+
+### Interface
+
+The system was developed on Google Earth Engine for policymakers, urban planners, and environmental researchers. It combines map interaction, chart visualization, and simulation functions to support urban heat island mitigation and greening strategies. A year slider allows switching between NDVI and LST layers from 2013 to 2022, with automatic legend and color scale updates. Users can select any location to view historical trends in vegetation and surface temperature. A built-in simulator adjusts NDVI increments and visualizes predicted cooling. The system identifies persistent heat islands using LST percentile thresholds and compares urban-rural zones to reveal spatial ecological inequality.
+
+
+## The Application 
+
+:::{.column-page}
+
+<iframe src='https://yqzhang5112.users.earthengine.app/view/casa0025' width='100%' height='700px'></iframe>
+
+:::
+## How it Works 
+
+1. Load Datasets
+```js
+// Load city boundary FeatureCollection (polygon vector data)
+var cityBoundary = ee.FeatureCollection("projects/ee-yqzhang5112/assets/City_Boundary");
+
+// Load MODIS NDVI collection, convert to NDVI scale, and add 'year' property
+var ndviCol = ee.ImageCollection("MODIS/006/MOD13Q1").select("NDVI")
+  .map(function(img) {
+    var year = ee.Date(img.get('system:time_start')).get('year');
+    return img.multiply(0.0001).copyProperties(img, ['system:time_start']).set('year', year);
+  });
+
+// Load MODIS LST collection, convert to Celsius, rename band, and add 'year' property
+var lstCol = ee.ImageCollection("MODIS/006/MOD11A2").select("LST_Day_1km")
+  .map(function(img) {
+    var year = ee.Date(img.get('system:time_start')).get('year');
+    return img.multiply(0.02).subtract(273.15).rename('LST_C')
+             .copyProperties(img, ['system:time_start']).set('year', year);
+  });
+
+// Load pre-aggregated NDVI and LST tables (features by neighborhood and year)
+var ndviTable = ee.FeatureCollection("projects/ee-liruixuanie/assets/NDVI_merge");
+var lstTable = ee.FeatureCollection("projects/ee-liruixuanie/assets/LST_merge");
+```
+
+2. Utility Function to Remove Layers
+```js
+// Remove map layer by its name (used for dynamic visualization updates)
+function removeLayer(name) {
+  Map.layers().forEach(function(layer) {
+    if (layer.getName() === name) Map.remove(layer);
+  });
+}
+```
+
+3. Initialize UI
+```js
+// Center map on city and add city boundary for context
+Map.centerObject(cityBoundary, 10);
+Map.addLayer(cityBoundary, {color: 'black'}, 'City Boundary');
+
+// Add a year selection slider to control NDVI and LST visualization by year
+var yearSlider = ui.Slider({
+  min: 2013, max: 2022, step: 1, value: 2020,
+  onChange: function(year) {
+    updateNDVI(year);
+    updateLST(year);
+    renderPrediction(year, ndviDeltaSlider.getValue());
+  }
+});
+Map.add(ui.Panel([ui.Label('Select Year for NDVI and LST'), yearSlider], null, {position: 'top-left'}));
+```
+
+4. Define Legend Function
+```js
+// Create colorbar legend panel for map layers
+function makeLegend(titleText, palette, minVal, maxVal) {
+  var legend = ui.Panel({style: {
+    position: 'bottom-left', padding: '8px 15px', backgroundColor: 'white'
+  }});
+  var title = ui.Label({value: titleText, style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 6px 0'}});
+  var colorBar = ui.Thumbnail({
+    image: ee.Image.pixelLonLat().select(0).multiply((maxVal - minVal)/100.0).add(minVal)
+            .visualize({min: minVal, max: maxVal, palette: palette}),
+    params: {bbox: [0, 0, 100, 10], dimensions: '100x10'},
+    style: {stretch: 'horizontal', margin: '4px 8px'}
+  });
+  var labels = ui.Panel({
+    widgets: [
+      ui.Label(minVal.toFixed(1), {fontSize: '10px'}),
+      ui.Label('Low → High', {fontSize: '10px', textAlign: 'center', stretch: 'horizontal'}),
+      ui.Label(maxVal.toFixed(1), {fontSize: '10px', textAlign: 'right'})
+    ],
+    layout: ui.Panel.Layout.flow('horizontal')
+  });
+  legend.add(title);
+  legend.add(colorBar);
+  legend.add(labels);
+  return legend;
+}
+
+var ndviLegendPanel;
+var lstLegendPanel;
+```
+
+5. NDVI Image and Chart
+Shows the NDVI map for the selected year。
+```js
+// Update NDVI map for a selected year, remove previous NDVI layer, add legend
+function updateNDVI(year) {
+  if (ndviLegendPanel) Map.remove(ndviLegendPanel);
+  var ndviImage = ndviCol.filter(ee.Filter.eq('year', year)).mean().clip(cityBoundary);
+  Map.layers().forEach(function(layer) {
+    if (layer.getName() === 'NDVI_Year') Map.remove(layer);
+  });
+  Map.addLayer(ndviImage, {min: 0.2, max: 0.8, palette: ['white', '#66bb66', 'darkgreen']}, 'NDVI_Year');
+  ndviLegendPanel = makeLegend('NDVI Index', ['white', '#66bb66', 'darkgreen'], 0.2, 0.8);
+  Map.add(ndviLegendPanel);
+}
+```
+
+6. LST Image and Chart
+Shows LST map for the selected year, highlights the hottest 10% (urban heat islands) in red.
+```js
+// Update LST map for a selected year, mask top 10% as urban heat island, add legend
+function updateLST(year) {
+  if (lstLegendPanel) Map.remove(lstLegendPanel);
+  var lstImage = lstCol.filter(ee.Filter.eq('year', year)).mean().clip(cityBoundary);
+  Map.layers().forEach(function(layer) {
+    var name = layer.getName();
+    if (name === 'LST_Year' || name === 'Heat_Island') Map.remove(layer);
+  });
+  Map.addLayer(lstImage, {min: 20, max: 40, palette: ['blue', 'cyan', 'yellow', 'orange', 'red']}, 'LST_Year');
+  var lst90 = lstImage.reduceRegion({reducer: ee.Reducer.percentile([90]), geometry: cityBoundary.geometry(), scale: 1000}).get('LST_C');
+  var mask = lstImage.gt(ee.Number(lst90)).selfMask();
+  Map.addLayer(mask, {palette: ['red']}, 'Heat_Island');
+  lstLegendPanel = makeLegend('LST (°C)', ['blue', 'cyan', 'yellow', 'orange', 'red'], 20, 40);
+  Map.add(lstLegendPanel);
+}
+```
+
+7. Urban vs Rural Chart
+NDVI/LST values by urban/rural class and annual time series for comparison.
+```js
+// Add urban/rural class info to NDVI and LST tables for group comparisons
+var withClassNDVI = ndviTable.map(function(f) {
+  var region = cityBoundary.filter(ee.Filter.eq('Name', f.get('Name'))).first();
+  return f.set('UrbanClass', region.get('UrbanClass'));
+});
+
+var withClassLST = lstTable.map(function(f) {
+  var region = cityBoundary.filter(ee.Filter.eq('Name', f.get('Name'))).first();
+  return f.set('UrbanClass', region.get('UrbanClass'));
+});
+
+// Create and print NDVI and LST line charts grouped by UrbanClass
+var ndviByClass = ui.Chart.feature.groups({
+  features: withClassNDVI,
+  xProperty: 'Year',
+  yProperty: 'mean',
+  seriesProperty: 'UrbanClass'
+}).setChartType('LineChart')
+  .setOptions({
+    title: 'Annual mean of NDVI in urban and rural areas',
+    hAxis: {title: 'Year'},
+    vAxis: {title: 'NDVI'},
+    lineWidth: 2
+  });
+print(ndviByClass);
+
+var lstByClass = ui.Chart.feature.groups({
+  features: withClassLST,
+  xProperty: 'Year',
+  yProperty: 'mean',
+  seriesProperty: 'UrbanClass'
+}).setChartType('LineChart')
+  .setOptions({
+    title: 'Annual mean of LST in urban and rural areas',
+    hAxis: {title: 'Year'},
+    vAxis: {title: 'LST (°C)'},
+    lineWidth: 2
+  });
+print(lstByClass);
+```
+
+8. Count Regions with Heat Islands
+Identifies neighborhoods repeatedly in the hottest 10% (persistent heat islands), helping target mitigation.
+```js
+// For each year, select top 10% hottest neighborhoods and count their recurrence
+var years = ee.List.sequence(2013, 2022);
+
+var topHotLists = years.map(function(y) {
+  var yearTable = lstTable.filter(ee.Filter.eq('Year', y));
+  var sorted = yearTable.sort('mean', false); 
+  var count = sorted.size();
+  var top10pct = sorted.limit(count.multiply(0.1).int());
+  return top10pct.aggregate_array('Name');
+});
+
+var allNames = topHotLists.flatten();
+var nameFreq = allNames.reduce(ee.Reducer.frequencyHistogram());
+
+nameFreq.evaluate(function(hist) {
+  print('Urban heat island areas (≥ 5 years):');
+  var keys = Object.keys(hist);
+  var result = keys.map(function(k) {
+    return {name: k, count: hist[k]};
+  }).filter(function(obj) {
+    return obj.count >= 5;
+  }).sort(function(a, b) {
+    return b.count - a.count;
+  });
+
+  result.forEach(function(obj) {
+    print(obj.name + ': ' + obj.count);
+  });
+});
+```
+
+9. NDVI Simulated Prediction
+NDVI–LST regression, NDVI increase simulation, and interactive map cooling effect prediction.
+The form of NDVI–LST regression:
+$$
+\Large \mathrm{LST} = k \times \mathrm{NDVI} + b
+$$
+k represents the slope: how much ° C of surface temperature change (LST) occurs per unit increase in NDVI.NDVI=0 estimates intercept LST: b.
+
+*Addition of 1 unit of NDVI in results assumes land surface transitions from 0 to dense forest. To better detect the LST-NDVI correlation, the slope value will be high.
+
+```js
+// Fit NDVI-LST regression model for a year, allow users to simulate NDVI increase effects
+var year = 2020;
+var ndviImage = ndviCol.filter(ee.Filter.eq('year', year)).mean().clip(cityBoundary);
+var lstImage = lstCol.filter(ee.Filter.eq('year', year)).mean().clip(cityBoundary);
+
+// Define mask for valid NDVI and LST range
+var mask = ndviImage.gt(0.1).and(ndviImage.lt(0.7))
+                    .and(lstImage.gt(10)).and(lstImage.lt(45));
+
+// Calculate linear fit (slope and intercept) between NDVI and LST for masked region
+var regression = ndviImage.addBands(lstImage).updateMask(mask)
+  .reduceRegion({
+    reducer: ee.Reducer.linearFit(),
+    geometry: cityBoundary.geometry(),
+    scale: 500,
+    maxPixels: 1e13
+  });
+
+// Evaluate regression and provide interactive simulation for NDVI increase
+regression.evaluate(function(result) {
+  print('Regression index：', result);
+
+  var slope = ee.Number(result.scale);
+  var intercept = ee.Number(result.offset);
+
+  var predictedLST = ndviImage.multiply(slope).add(intercept);
+  Map.addLayer(predictedLST, {
+    min: 20, max: 40,
+    palette: ['blue', 'cyan', 'yellow', 'orange', 'red']
+  }, 'Predicted LST');
+
+  var predictionLabel = ui.Label('Simulated Temperature Change by NDVI Increase');
+
+  // Slider to allow user to interactively simulate NDVI increase and its LST impact
+  var ndviDeltaSlider = ui.Slider({
+    min: 0,
+    max: 0.2,
+    step: 0.01,
+    value: 0.05,
+    style: {stretch: 'horizontal'},
+    onChange: function(delta) {
+      var simulatedNDVI = ndviImage.add(delta);
+      var newLST = simulatedNDVI.multiply(slope).add(intercept);
+      var diffImage = lstImage.subtract(newLST).selfMask();
+
+      // Remove previous simulation layers before updating
+      var layersToRemove = [];
+      Map.layers().forEach(function(layer) {
+        var name = layer.getName();
+        if (typeof name === 'string' && (name === 'Predicted LST')) {
+          layersToRemove.push(layer);
+        }
+      });
+      layersToRemove.forEach(function(layer) {
+        Map.remove(layer);
+      });
+
+      // Add new simulated LST prediction
+      Map.addLayer(newLST, {
+        min: 20, max: 40,
+        palette: ['blue', 'cyan', 'yellow', 'orange', 'red']
+      }, 'Predicted LST');
+
+      // Update label to show estimated cooling
+      predictionLabel.setValue('NDVI increased by ' + delta.toFixed(2) +
+        ', LST estimated Cooling' + (slope.multiply(delta)).format('%.2f').getInfo() + ' °C');
+    }
+  });
+
+  var predictionPanel = ui.Panel({
+    widgets: [
+      ui.Label('Predicted Land Surface Temperature after NDVI Increase', {fontWeight: 'bold'}),
+      ndviDeltaSlider,
+      predictionLabel
+    ],
+    style: {position: 'bottom-left', padding: '8px', width: '280px'}
+  });
+  Map.add(predictionPanel);
+
+});
+```
+
+10. Click on a Region to View Trends
+```js
+// When user clicks on a region, show NDVI and LST time series for that region
+Map.onClick(function(coords) {
+  if (chartTabs.getValue() !== 'Clicked Region Trend') return;
+
+  var point = ee.Geometry.Point(coords.lon, coords.lat);
+  var f = ndviTable.filterBounds(point).first();
+  f.evaluate(function(feature) {
+    if (feature) {
+      var name = feature.properties.Name;
+      chartDisplayPanel.clear();
+      chartDisplayPanel.add(ui.Label('Region: ' + name));
+
+      // NDVI trend for selected region
+      var ndviChart = ui.Chart.feature.byFeature(
+        ndviTable.filter(ee.Filter.eq('Name', name)), 'Year', ['mean']
+      ).setChartType('LineChart').setOptions({
+        title: 'NDVI Trend – ' + name,
+        hAxis: {title: 'Year'}, vAxis: {title: 'NDVI'}
+      });
+
+      // LST trend for selected region
+      var lstChart = ui.Chart.feature.byFeature(
+        lstTable.filter(ee.Filter.eq('Name', name)), 'Year', ['mean']
+      ).setChartType('LineChart').setOptions({
+        title: 'LST Trend – ' + name,
+        hAxis: {title: 'Year'}, vAxis: {title: 'LST (°C)'}
+      });
+
+      chartDisplayPanel.add(ndviChart);
+      chartDisplayPanel.add(lstChart);
+    }
+  });
+});
+```
+
+11. Initialize Layer Rendering
+```js
+// Initial rendering of NDVI and LST for default year (2020)
+updateNDVI(2020);
+updateLST(2020);
+```
+
+12. Chart Tabs & Toggle Panel
+```js
+// Function to get urban vs rural NDVI chart
+function getUrbanRuralNDVIChart() { ... }
+
+// Function to get urban vs rural LST chart
+function getUrbanRuralLSTChart() { ... }
+
+// Chart control panel for trend tabs
+var chartControlPanel = ui.Panel({
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {position: 'top-right', width: '420px', backgroundColor: 'white', padding: '8px'}
+});
+
+var chartDisplayPanel = ui.Panel();  // For dynamic display of charts based on tab
+
+// Tab selector for different chart views
+var chartTabs = ui.Select({
+  items: ['Urban/Rural Comparison', 'Persistent Heat Islands', 'Clicked Region Trend', 'NDVI vs LST Scatter'],
+  value: 'Urban/Rural Comparison',
+  onChange: function(selected) {
+    chartDisplayPanel.clear();
+
+    if (selected === 'Urban/Rural Comparison') {
+      chartDisplayPanel.add(getUrbanRuralNDVIChart());
+      chartDisplayPanel.add(getUrbanRuralLSTChart());
+
+    } else if (selected === 'Persistent Heat Islands') {
+      chartDisplayPanel.add(ui.Label('Regions with UHI ≥ 5 years:'));
+      nameFreq.evaluate(function(hist) {
+        var keys = Object.keys(hist);
+        var result = keys.map(function(k) {
+          return {name: k, count: hist[k]};
+        }).filter(function(obj) {
+          return obj.count >= 5;
+        }).sort(function(a, b) {
+          return b.count - a.count;
+        });
+
+        result.forEach(function(obj) {
+          chartDisplayPanel.add(ui.Label(obj.name + ': ' + obj.count + ' years'));
+        });
+
+        if (result.length === 0) {
+          chartDisplayPanel.add(ui.Label('No regions with persistent UHI over 5 years.'));
+        }
+      });
+
+    } else if (selected === 'Clicked Region Trend') {
+      chartDisplayPanel.add(ui.Label('Please click a region on the map to load NDVI & LST trends.'));
+      
+    } else if (selected === 'NDVI vs LST Scatter') {
+      var join = ee.Join.inner();
+      var filter = ee.Filter.and(
+        ee.Filter.equals({leftField: 'Name', rightField: 'Name'}),
+        ee.Filter.equals({leftField: 'Year', rightField: 'Year'})
+      );
+
+      var joined = join.apply(ndviTable, lstTable, filter).map(function(pair) {
+        var ndvi = ee.Feature(pair.get('primary'));
+        var lst = ee.Feature(pair.get('secondary'));
+        return ndvi.set('LST_C', lst.get('mean')).set('NDVI', ndvi.get('mean'));
+      });
+
+      var scatterChart = ui.Chart.feature.byFeature(joined, 'LST_C', ['NDVI'])
+        .setChartType('ScatterChart')
+        .setOptions({
+          title: 'NDVI vs LST Cor
+```
+
+
+
+
+
